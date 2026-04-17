@@ -1,9 +1,14 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, LabelList } from 'recharts';
-import { Upload, BarChart3, Info, ShoppingBag, TrendingUp, Printer, ArrowUpRight, ArrowDownRight } from 'lucide-react';
+import { Upload, BarChart3, Info, ShoppingBag, Printer, ArrowUpRight, ArrowDownRight, Sparkles } from 'lucide-react';
+import { GoogleGenAI } from "@google/genai";
 
-// --- CONFIGURAÇÕES ---
+// --- CONFIGURAÇÃO DA IA ---
+// Coloque sua chave aqui. O modelo preview já está configurado.
+const aiKey = import.meta.env.VITE_GEMINI_KEY;
+const ai = new GoogleGenAI({ apiKey: aiKey });
+
 const MODALITIES = [
     { key: 'ACC_MAX', label: 'ACC MAX', color: '#4f46e5' },
     { key: 'PI', label: 'PI', color: '#db2777' },
@@ -27,54 +32,22 @@ const StatCard = ({ label, value, color, breakdown, compareValue, hasComparison,
                 {hasComparison && !isEqual && (
                     <div className="flex items-center gap-1 mt-1 border-t pt-1">
                         <span className="text-[10px] font-bold text-slate-400">Ant: {compareValue || 0}</span>
-                        {isImprovement ? (
-                            <ArrowUpRight size={12} strokeWidth={3} className="text-green-500" />
-                        ) : (
-                            <ArrowDownRight size={12} strokeWidth={3} className="text-red-500" />
-                        )}
+                        {isImprovement ? <ArrowUpRight size={12} strokeWidth={3} className="text-green-500" /> : <ArrowDownRight size={12} strokeWidth={3} className="text-red-500" />}
                     </div>
                 )}
             </div>
             {breakdown && Object.keys(breakdown).length > 0 && (
                 <div className="mt-2 space-y-1 border-t pt-2">
-                    {Object.entries(breakdown).map(([m, v]) => {
-                        const val = v as number;
-                        return val > 0 && (
-                            <div key={m} className="flex justify-between text-[8px] font-bold text-slate-500 uppercase italic">
-                                <span>{m}</span><span>{val}</span>
-                            </div>
-                        );
-                    })}
+                    {Object.entries(breakdown).map(([m, v]) => (v as number) > 0 && (
+                        <div key={m} className="flex justify-between text-[8px] font-bold text-slate-500 uppercase italic">
+                            <span>{m}</span><span>{v as number}</span>
+                        </div>
+                    ))}
                 </div>
             )}
         </div>
     );
 };
-
-const InsightCard = ({ stats }: any) => {
-    if (!stats.hasComparison) return null;
-    const certDiff = ((stats.base.certs - stats.comp.certs) / (stats.comp.certs || 1) * 100);
-    const zeroDiff = stats.base.zeroTotal - stats.comp.zeroTotal;
-    const isUp = stats.base.certs >= stats.comp.certs;
-
-    return (
-        <div className="bg-white p-6 rounded-xl border-l-8 border-blue-600 shadow-sm space-y-4 break-inside-avoid">
-            <div className="flex justify-between items-start">
-                <h2 className="text-lg font-black uppercase flex items-center gap-2"><TrendingUp className="text-blue-600" /> Insight Comparativo</h2>
-                <div className={`px-4 py-2 rounded-lg flex items-center gap-2 font-black text-xl ${isUp ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>
-                    {isUp ? <ArrowUpRight size={20} strokeWidth={3} /> : <ArrowDownRight size={20} strokeWidth={3} />}
-                    {Math.abs(certDiff).toFixed(1)}%
-                </div>
-            </div>
-            <div className="bg-slate-50 p-4 rounded-lg border border-slate-100 text-sm text-slate-700 font-medium leading-relaxed">
-                {isUp ? "Volume de emissões em crescimento. " : "Houve uma retração no volume de certificados. "}
-                {zeroDiff < 0 ? `Excelente: O funcionário reduziu a inatividade. ` : zeroDiff > 0 ? `Atenção: O índice de Vezes Zero aumentou. ` : ""}
-            </div>
-        </div>
-    );
-};
-
-// --- COMPONENTE PRINCIPAL ---
 
 const DashboardIndicacoes = () => {
     const [data, setData] = useState<any[]>([]);
@@ -82,6 +55,10 @@ const DashboardIndicacoes = () => {
     const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
     const [compareYear, setCompareYear] = useState<number | null>(null);
     const [selectedMonth, setSelectedMonth] = useState('Todos');
+    
+    // ESTADO PARA O INSIGHT DA IA
+    const [aiInsight, setAiInsight] = useState<string>('Carregando análise inteligente...');
+    const [loadingAI, setLoadingAI] = useState(false);
 
     const handlePrint = () => window.print();
 
@@ -104,7 +81,7 @@ const DashboardIndicacoes = () => {
     const handleFileUpload = (e: any) => {
         const file = e.target.files?.[0];
         if (!file) return;
-        setData([]); 
+        setData([]);
         const reader = new FileReader();
         reader.onload = (evt: any) => {
             const wb = XLSX.read(evt.target.result, { type: 'binary' });
@@ -118,16 +95,15 @@ const DashboardIndicacoes = () => {
                         const mesKey = Object.keys(row).find(k => k.toLowerCase().trim() === 'mês');
                         if (mesKey && row[mesKey]) {
                             const certKey = Object.keys(row).find(k => k.toLowerCase().includes('certificado'));
-                            const certsRaw = certKey ? row[certKey] : 0;
-                            const certsNum = parseInt(String(certsRaw).replace(/\D/g, '')) || 0;
+                            const certsValue = certKey ? row[certKey] : 0;
                             rows.push({
-                                Ano: ano, 
+                                Ano: ano,
                                 Mês: String(row[mesKey]).trim(),
                                 fech: parseCell(row['quantidade_de_fechamentos']),
                                 um: parseCell(row['indicaram_apenas_um']),
                                 pos: parseCell(row['positivacoes']),
                                 zero: parseCell(row['nao_indicaram']),
-                                certs: certsNum
+                                certs: parseInt(String(certsValue || 0).replace(/\D/g, '')) || 0
                             });
                         }
                     });
@@ -150,19 +126,16 @@ const DashboardIndicacoes = () => {
 
         const formatted = baseFiltrada.map(b => {
             const c = compAnual.find(item => item.Mês === b.Mês);
-            const row: any = { 
-                Mês: b.Mês, zero: b.zero.total, um: b.um.total, pos: b.pos.total, 
-                zeroComp: c?.zero.total || 0, umComp: c?.um.total || 0, posComp: c?.pos.total || 0 
-            };
-            MODALITIES.forEach(m => { 
-                row[`base_${m.label}`] = b.fech.breakdown[m.label] || 0; 
-                row[`comp_${m.label}`] = c?.fech.breakdown[m.label] || 0; 
-            });
+            const row: any = { Mês: b.Mês, zero: b.zero.total, um: b.um.total, pos: b.pos.total, zeroComp: c?.zero.total || 0, umComp: c?.um.total || 0, posComp: c?.pos.total || 0 };
+            MODALITIES.forEach(m => { row[`base_${m.label}`] = b.fech.breakdown[m.label] || 0; row[`comp_${m.label}`] = c?.fech.breakdown[m.label] || 0; });
             return row;
         }).sort((a, b) => (ordem[a.Mês as keyof typeof ordem] || 0) - (ordem[b.Mês as keyof typeof ordem] || 0));
 
         const sum = (list: any[]) => {
-            const s = { certs: 0, posTotal: 0, umTotal: 0, zeroTotal: 0, fechTotal: 0, posBr: {} as any, fechBr: {} as any, umBr: {} as any, zeroBr: {} as any };
+            const s = { 
+                certs: 0, posTotal: 0, umTotal: 0, zeroTotal: 0, fechTotal: 0, 
+                posBr: {} as any, fechBr: {} as any, umBr: {} as any, zeroBr: {} as any 
+            };
             list.forEach(d => {
                 s.certs += (d.certs || 0); s.posTotal += d.pos.total; s.umTotal += d.um.total; s.zeroTotal += d.zero.total; s.fechTotal += d.fech.total;
                 Object.entries(d.pos.breakdown).forEach(([m, v]) => { s.posBr[m] = (s.posBr[m] || 0) + (v as number); });
@@ -173,62 +146,91 @@ const DashboardIndicacoes = () => {
             return s;
         };
 
-        return { 
-            chartData: formatted, 
+        return {
+            chartData: formatted,
             stats: { base: sum(baseFiltrada), comp: sum(compFiltrada), hasComparison: !!compareYear },
             availableYears: Array.from(new Set(data.map(d => d.Ano))).sort((a, b) => b - a),
             availableMonths: ['Todos', ...Array.from(new Set(baseAnual.map(d => d.Mês)))]
         };
     }, [data, selectedYear, compareYear, selectedMonth]);
 
+    // --- LÓGICA DO GEMINI ---
+    useEffect(() => {
+        const fetchAIInsight = async () => {
+            if (data.length === 0) return;
+            setLoadingAI(true);
+            try {
+                const response = await ai.models.generateContent({
+                    model: "gemini-flash-latest",
+                    contents: `Analise a performance do funcionário ${selectedFunc}.
+                    Ano Atual: ${stats.base.certs} certificados, ${stats.base.fechTotal} fechamentos, ${stats.base.posTotal} positivas, ${stats.base.zeroTotal} vezes zero.
+                    Ano Comparação: ${stats.comp.certs} certificados, ${stats.comp.fechTotal} fechamentos, ${stats.comp.posTotal} positivas, ${stats.comp.zeroTotal} vezes zero.
+                    Lógica: Menos 'Vezes Zero' é melhor. Mais Certificados e Positivas é melhor.
+                    Escreva um insight de gestão curto (4 linhas), direto e motivador em português.`
+                });
+                setAiInsight(response.text || "Análise concluída.");
+            } catch (error) {
+                setAiInsight("Aguardando conexão com a IA para análise...");
+            } finally {
+                setLoadingAI(false);
+            }
+        };
+        fetchAIInsight();
+    }, [stats, selectedFunc, selectedYear, compareYear]);
+
     return (
         <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans print:bg-white print:p-0">
-            <style dangerouslySetInnerHTML={{ __html: `
-                @page { size: landscape; margin: 8mm; }
-                @media print { 
-                    .no-print { display: none !important; } 
-                    body { background: white !important; margin: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; } 
-                    .max-w-6xl { max-width: 100% !important; width: 100% !important; margin: 0 !important; }
-                    .recharts-responsive-container { width: 100% !important; height: 300px !important; }
-                    .print-header { display: flex !important; border-bottom: 3px solid #000; padding-bottom: 10px; margin-bottom: 30px; }
-                    .break-inside-avoid { page-break-inside: avoid; break-inside: avoid; }
-                    .grid-cols-5 { grid-template-columns: repeat(5, minmax(0, 1fr)) !important; }
-                } 
-                .print-header { display: none; }
-            ` }} />
+            <style dangerouslySetInnerHTML={{ __html: `@page { size: landscape; margin: 8mm; } @media print { .no-print { display: none !important; } body { background: white !important; margin: 0; padding: 0; } .max-w-6xl { max-width: 100% !important; width: 100% !important; margin: 0 !important; } .recharts-responsive-container { width: 100% !important; height: 320px !important; } .print-header { display: flex !important; border-bottom: 2px solid #334155; padding-bottom: 10px; margin-bottom: 20px; } .break-inside-avoid { page-break-inside: avoid; break-inside: avoid; } } .print-header { display: none; }` }} />
 
             <div className="max-w-6xl mx-auto space-y-6">
                 <div className="print-header flex justify-between items-end">
                     <div>
-                        <h1 className="text-2xl font-black text-slate-800 uppercase tracking-tighter">Relatório Analítico de Desempenho</h1>
-                        <p className="text-sm font-bold text-slate-600 italic">Profissional: {selectedFunc} | {selectedYear} {compareYear && `vs ${compareYear}`}</p>
+                        <h1 className="text-2xl font-black text-slate-800 uppercase tracking-tighter">Relatório Analítico: {selectedFunc}</h1>
+                        <p className="text-sm font-bold text-slate-600">{selectedYear} {compareYear && `vs ${compareYear}`} | {selectedMonth}</p>
                     </div>
                 </div>
 
                 <div className="bg-white p-6 rounded-xl shadow-sm border flex justify-between items-center no-print">
-                    <h1 className="text-xl font-black text-slate-800 uppercase flex items-center gap-2"><BarChart3 className="text-blue-600" /> Dashboard - {selectedFunc}</h1>
+                    <h1 className="text-xl font-black text-slate-800 uppercase flex items-center gap-2"><BarChart3 className="text-blue-600" /> Analítico - {selectedFunc}</h1>
                     <div className="flex gap-2 font-bold">
-                        <button onClick={handlePrint} className="bg-slate-800 text-white px-4 py-2 rounded-lg text-xs uppercase flex items-center gap-2 hover:bg-black transition-all"><Printer size={16}/> Gerar PDF</button>
-                        <label className="bg-blue-600 text-white px-4 py-2 rounded-lg text-xs uppercase cursor-pointer flex items-center gap-2 hover:bg-blue-700 transition-all">
-                            <Upload size={16}/> Importar <input type="file" className="hidden" onChange={handleFileUpload} />
+                        <button onClick={handlePrint} className="bg-slate-800 text-white px-4 py-2 rounded-lg text-xs uppercase flex items-center gap-2 hover:bg-black"><Printer size={16} /> PDF</button>
+                        <label className="bg-blue-600 text-white px-4 py-2 rounded-lg text-xs uppercase cursor-pointer flex items-center gap-2 hover:bg-blue-700">
+                            <Upload size={16} /> Importar <input type="file" className="hidden" onChange={handleFileUpload} />
                         </label>
                     </div>
                 </div>
 
-                {data.length > 0 ? (
+                {data.length > 0 && (
                     <div className="space-y-6">
+                        {/* INSIGHT CARD COM IA */}
+                        <div className="bg-white p-6 rounded-xl border-l-8 border-indigo-600 shadow-sm space-y-4 break-inside-avoid">
+                            <div className="flex justify-between items-start">
+                                <h2 className="text-lg font-black uppercase flex items-center gap-2"><Sparkles className="text-indigo-600" /> Insight Consultor IA</h2>
+                                {stats.hasComparison && (
+                                    <div className={`px-4 py-2 rounded-lg flex items-center gap-2 font-black text-xl ${stats.base.certs >= stats.comp.certs ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>
+                                        {stats.base.certs >= stats.comp.certs ? <ArrowUpRight size={20} strokeWidth={3} /> : <ArrowDownRight size={20} strokeWidth={3} />}
+                                        {Math.abs(((stats.base.certs - stats.comp.certs) / (stats.comp.certs || 1) * 100)).toFixed(1)}%
+                                    </div>
+                                )}
+                            </div>
+                            <div className={`bg-slate-50 p-4 rounded-lg border border-slate-100 text-sm text-slate-700 font-medium leading-relaxed ${loadingAI ? 'opacity-50 animate-pulse' : ''}`}>
+                                {aiInsight}
+                            </div>
+                        </div>
+
+                        {/* FILTROS */}
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 no-print font-black text-center text-xs">
                             <div className="bg-white p-3 rounded-lg border shadow-sm">
                                 <p className="text-slate-400 uppercase mb-2">Ano Base</p>
                                 <div className="flex gap-1 justify-center flex-wrap">
-                                    {availableYears.map(y => <button key={y as number} onClick={() => setSelectedYear(y as number)} className={`px-3 py-1 rounded border ${selectedYear === y ? 'bg-blue-600 text-white' : 'bg-white'}`}>{y as number}</button>)}
+                                    {availableYears.map(y => <button key={y as number} onClick={() => setSelectedYear(y as number)} className={`px-3 py-1 rounded border ${selectedYear === y ? 'bg-blue-600 text-white font-black' : 'bg-white'}`}>{y as number}</button>)}
                                 </div>
                             </div>
                             <div className="bg-white p-3 rounded-lg border shadow-sm">
                                 <p className="text-orange-500 uppercase mb-2">Comparar</p>
                                 <div className="flex gap-1 justify-center flex-wrap">
-                                    <button onClick={() => setCompareYear(null)} className={`px-3 py-1 rounded border ${compareYear === null ? 'bg-orange-500 text-white' : 'bg-white'}`}>OFF</button>
-                                    {availableYears.filter(y => y !== selectedYear).map(y => <button key={y as number} onClick={() => setCompareYear(y as number)} className={`px-3 py-1 rounded border ${compareYear === y ? 'bg-orange-500 text-white' : 'bg-white'}`}>{y as number}</button>)}
+                                    <button onClick={() => setCompareYear(null)} className={`px-3 py-1 rounded border ${compareYear === null ? 'bg-orange-500 text-white font-black' : 'bg-white'}`}>OFF</button>
+                                    {availableYears.filter(y => y !== selectedYear).map(y => <button key={y as number} onClick={() => setCompareYear(y as number)} className={`px-3 py-1 rounded border ${compareYear === y ? 'bg-orange-500 text-white font-black' : 'bg-white'}`}>{y as number}</button>)}
                                 </div>
                             </div>
                             <div className="bg-white p-3 rounded-lg border shadow-sm">
@@ -237,16 +239,16 @@ const DashboardIndicacoes = () => {
                             </div>
                         </div>
 
-                        <InsightCard stats={stats} />
-
-                        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 break-inside-avoid">
+                        {/* CARDS */}
+                        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
                             <StatCard label="Certificados" value={stats.base.certs} compareValue={stats.comp.certs} hasComparison={stats.hasComparison} color="text-blue-600" />
                             <StatCard label="Fechamentos" value={stats.base.fechTotal} compareValue={stats.comp.fechTotal} hasComparison={stats.hasComparison} color="text-indigo-600" breakdown={stats.base.fechBr} />
-                            <StatCard label="Positivas" value={stats.base.posTotal} compareValue={stats.comp.posTotal} hasComparison={stats.hasComparison} color="text-green-600" breakdown={stats.base.posBr} />
-                            <StatCard label="Um" value={stats.base.umTotal} compareValue={stats.comp.umTotal} hasComparison={stats.hasComparison} color="text-yellow-600" breakdown={stats.base.umBr} />
-                            <StatCard label="Zero" value={stats.base.zeroTotal} compareValue={stats.comp.zeroTotal} hasComparison={stats.hasComparison} color="text-red-600" isInverted={true} breakdown={stats.base.zeroBr} />
+                            <StatCard label="Positivações" value={stats.base.posTotal} compareValue={stats.comp.posTotal} hasComparison={stats.hasComparison} color="text-green-600" breakdown={stats.base.posBr} />
+                            <StatCard label="Indicaram apenas um certificado" value={stats.base.umTotal} compareValue={stats.comp.umTotal} hasComparison={stats.hasComparison} color="text-yellow-600" breakdown={stats.base.umBr} />
+                            <StatCard label="Inativos" value={stats.base.zeroTotal} compareValue={stats.comp.zeroTotal} hasComparison={stats.hasComparison} color="text-red-600" isInverted={true} breakdown={stats.base.zeroBr} />
                         </div>
 
+                        {/* GRÁFICO 1 */}
                         <div className="bg-white p-6 rounded-xl border shadow-sm break-inside-avoid">
                             <h3 className="text-[11px] font-black uppercase mb-6 border-b pb-2 flex items-center gap-2"><Info size={16} className="text-blue-500" /> Performance {selectedMonth === 'Todos' ? 'Anual' : `em ${selectedMonth}`}</h3>
                             <div className="h-[350px] w-full">
@@ -272,6 +274,7 @@ const DashboardIndicacoes = () => {
                             </div>
                         </div>
 
+                        {/* GRÁFICO 2 */}
                         <div className="bg-white p-6 rounded-xl border shadow-sm break-inside-avoid">
                             <h3 className="text-[11px] font-black uppercase mb-6 border-b pb-2 flex items-center gap-2"><ShoppingBag size={16} className="text-indigo-500"/> Mix de Produtos {selectedMonth === 'Todos' ? '' : `em ${selectedMonth}`}</h3>
                             <div className="h-[450px] w-full">
@@ -292,11 +295,6 @@ const DashboardIndicacoes = () => {
                                 </ResponsiveContainer>
                             </div>
                         </div>
-                    </div>
-                ) : (
-                    <div className="bg-white p-20 rounded-xl border border-dashed flex flex-col items-center justify-center text-slate-400">
-                        <Upload size={48} className="mb-4 opacity-20" />
-                        <p className="font-black uppercase tracking-widest text-xs text-center">Aguardando importação de dados...</p>
                     </div>
                 )}
             </div>
