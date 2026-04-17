@@ -1,7 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, LabelList } from 'recharts';
-import { Upload, BarChart3, Info, ShoppingBag, TrendingUp, Printer, User, Calendar, ArrowUpRight, ArrowDownRight } from 'lucide-react';
+import { Upload, BarChart3, Info, ShoppingBag, TrendingUp, Printer, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 
 // --- CONFIGURAÇÕES ---
 const MODALITIES = [
